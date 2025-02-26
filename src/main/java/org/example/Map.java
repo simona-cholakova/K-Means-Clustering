@@ -1,131 +1,112 @@
 package org.example;
 
-import javax.imageio.ImageIO;
+import org.jxmapviewer.JXMapViewer;
+import org.jxmapviewer.OSMTileFactoryInfo;
+import org.jxmapviewer.painter.CompoundPainter;
+import org.jxmapviewer.viewer.DefaultTileFactory;
+import org.jxmapviewer.viewer.GeoPosition;
+import org.jxmapviewer.viewer.WaypointPainter;
+import org.jxmapviewer.input.PanMouseInputListener;
+import org.jxmapviewer.input.ZoomMouseWheelListenerCenter;
+import org.jxmapviewer.input.CenterMapListener;
+
 import javax.swing.*;
 import java.awt.*;
-import java.awt.event.MouseAdapter;
-import java.awt.event.MouseEvent;
-import java.awt.image.BufferedImage;
-import java.io.IOException;
-import java.net.HttpURLConnection;
-import java.net.URL;
+import java.awt.geom.Point2D;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Random;
+import java.util.Set;
 
-public class Map extends JPanel {
-    private static final int TILE_SIZE = 256;
-    private static final int INITIAL_ZOOM = 3;
-    private double latitude = 41.9981; // Initial latitude (Bitola, Macedonia)
-    private double longitude = 21.4254; // Initial longitude
-    private int zoom = INITIAL_ZOOM;
+public class Map {
 
-    public Map() {
-        // Mouse wheel listener for zooming
-        addMouseWheelListener(e -> {
-            if (e.getWheelRotation() < 0) {
-                zoom = Math.min(zoom + 1, 19); // Max zoom level
-            } else {
-                zoom = Math.max(zoom - 1, 0); // Min zoom level
-            }
-            repaint();
-        });
-
-        // Mouse listener for panning
-        addMouseMotionListener(new MouseAdapter() {
-            private Point lastPoint;
-
-            @Override
-            public void mousePressed(MouseEvent e) {
-                lastPoint = e.getPoint();
-            }
-
-            @Override
-            public void mouseDragged(MouseEvent e) {
-                if (lastPoint != null) {
-                    int deltaX = e.getX() - lastPoint.x;
-                    int deltaY = e.getY() - lastPoint.y;
-                    longitude -= deltaX / (double) TILE_SIZE * 360 / Math.pow(2, zoom);
-                    latitude += deltaY / (double) TILE_SIZE * 180 / Math.pow(2, zoom);
-                    longitude = (longitude + 180) % 360 - 180; // Keep longitude in [-180, 180]
-                    latitude = Math.max(-85.0511, Math.min(85.0511, latitude)); // Clamp latitude
-                    lastPoint = e.getPoint();
-                    repaint();
-                }
-            }
-        });
-    }
-
-    @Override
-    protected void paintComponent(Graphics g) {
-        super.paintComponent(g);
-
-        int width = getWidth();
-        int height = getHeight();
-
-        int tileX = lonToTileX(longitude, zoom);
-        int tileY = latToTileY(latitude, zoom);
-
-        int tilesX = width / TILE_SIZE + 2;
-        int tilesY = height / TILE_SIZE + 2;
-
-        for (int dx = -tilesX / 2; dx <= tilesX / 2; dx++) {
-            for (int dy = -tilesY / 2; dy <= tilesY / 2; dy++) {
-                try {
-                    int x = tileX + dx;
-                    int y = tileY + dy;
-                    BufferedImage tile = fetchTile(zoom, x, y);
-                    if (tile != null) {
-                        int screenX = width / 2 + dx * TILE_SIZE;
-                        int screenY = height / 2 + dy * TILE_SIZE;
-                        g.drawImage(tile, screenX, screenY, TILE_SIZE, TILE_SIZE, null);
-                    }
-                } catch (Exception e) {
-                    // Handle missing tiles or network issues
-                    e.printStackTrace();
-                }
-            }
-        }
-    }
-
-    private BufferedImage fetchTile(int zoom, int x, int y) throws IOException {
-        // Ensure x and y are within valid bounds
-        int maxTileIndex = (1 << zoom) - 1; // 2^zoom - 1
-        if (x < 0 || x > maxTileIndex || y < 0 || y > maxTileIndex) {
-            return null; // Return null for invalid tile coordinates
-        }
-
-        // Construct the URL for the tile
-        String tileUrl = String.format("https://tile.openstreetmap.org/%d/%d/%d.png", zoom, x, y);
-        URL url = new URL(tileUrl);
-
-        // Add User-Agent header
-        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-        connection.setRequestProperty("User-Agent", "MyMapViewer/1.0 (your-email@example.com)");
-
-        // Check response code
-        if (connection.getResponseCode() != 200) {
-            return null; // Return null if the tile is not available
-        }
-
-        // Return the tile as a BufferedImage
-        return ImageIO.read(connection.getInputStream());
-    }
-
-
-    public static int lonToTileX(double lon, int zoom) {
-        return (int) Math.floor((lon + 180) / 360 * Math.pow(2, zoom));
-    }
-
-    public static int latToTileY(double lat, int zoom) {
-        double radLat = Math.toRadians(lat);
-        return (int) Math.floor((1 - Math.log(Math.tan(radLat) + 1 / Math.cos(radLat)) / Math.PI) / 2 * Math.pow(2, zoom));
-    }
-
-    public static void main(String[] args) {
-        JFrame frame = new JFrame("Map Viewer");
-        Map mapViewer = new Map();
-        frame.add(mapViewer);
-        frame.setSize(800, 600);
+    public static JFrame createMapFrame(List<Cluster> clusters) {
+        JFrame frame = new JFrame("Clustering Visualization");
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        frame.setVisible(true);
-    }
+        frame.setSize(800, 600);
 
+        JXMapViewer mapViewer = new JXMapViewer();
+
+        //set the tile factory (OpenStreetMap)
+        OSMTileFactoryInfo tileFactoryInfo = new OSMTileFactoryInfo();
+        DefaultTileFactory tileFactory = new DefaultTileFactory(tileFactoryInfo);
+        mapViewer.setTileFactory(tileFactory);
+
+        //initial focus location
+        GeoPosition startPosition = new GeoPosition(48.7758, 9.1829); //Stuttgart, Germany
+        mapViewer.setZoom(11);
+        mapViewer.setAddressLocation(startPosition);
+
+        //generate waypoints for clusters and records
+        //separate the waypoints into two: one for cluster centers and one for records
+        Set<ColoredWaypoint> clusterCenterWaypoints = new HashSet<>();
+        Set<ColoredWaypoint> recordWaypoints = new HashSet<>();
+        Random random = new Random();
+
+        for (Cluster cluster : clusters) {
+            //random color for the cluster
+            Color clusterColor = new Color(random.nextInt(200) + 55, random.nextInt(200) + 55, random.nextInt(200) + 55);
+
+            //waypoints for records in this cluster
+            for (Record record : cluster.getRecords()) {
+                GeoPosition recordPosition = new GeoPosition(record.getLa(), record.getLo());
+                recordWaypoints.add(new ColoredWaypoint(recordPosition, clusterColor));
+            }
+
+            //waypoint for the cluster center
+            GeoPosition centerPosition = new GeoPosition(cluster.getCenterLat(), cluster.getCenterLon());
+            clusterCenterWaypoints.add(new ColoredWaypoint(centerPosition, Color.BLACK, true)); //cluster black
+        }
+
+        //2 separate waypoint painters
+        WaypointPainter<ColoredWaypoint> recordPainter = new WaypointPainter<>();
+        recordPainter.setWaypoints(recordWaypoints);
+        recordPainter.setRenderer((g, map, wp) -> {
+            Point2D point = map.getTileFactory().geoToPixel(wp.getPosition(), map.getZoom());
+            if (point == null) return;
+
+            Graphics2D g2d = g;
+            g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g2d.setColor(wp.getColor());
+
+            int size = 7; //waypoint size
+            g2d.fillOval((int) point.getX() - size / 2, (int) point.getY() - size / 2, size, size);
+        });
+
+        WaypointPainter<ColoredWaypoint> centerPainter = new WaypointPainter<>();
+        centerPainter.setWaypoints(clusterCenterWaypoints);
+        centerPainter.setRenderer((g, map, wp) -> {
+            Point2D point = map.getTileFactory().geoToPixel(wp.getPosition(), map.getZoom());
+            if (point == null) return;
+
+            Graphics2D g2d = g;
+            g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+            int size = 15; //cluster size
+            g2d.setColor(Color.WHITE);
+            //int outlineSize = size + 4; // Add an outline for better visibility
+            //g2d.fillOval((int) point.getX() - outlineSize / 2, (int) point.getY() - outlineSize / 2, outlineSize, outlineSize); - for outline of the cluster
+
+            //draw the cluster center
+            g2d.setColor(wp.getColor());
+            g2d.fillOval((int) point.getX() - size / 2, (int) point.getY() - size / 2, size, size);
+        });
+
+        //combine painters
+        CompoundPainter<JXMapViewer> compoundPainter = new CompoundPainter<>();
+        compoundPainter.setPainters(recordPainter, centerPainter);
+
+        //sets compound painter on the map
+        mapViewer.setOverlayPainter(compoundPainter);
+
+        //listeners for panning and zooming
+        mapViewer.addMouseWheelListener(new ZoomMouseWheelListenerCenter(mapViewer));
+        mapViewer.addMouseListener(new PanMouseInputListener(mapViewer));
+        mapViewer.addMouseMotionListener(new PanMouseInputListener(mapViewer));
+        mapViewer.addMouseListener(new CenterMapListener(mapViewer));
+
+        frame.add(mapViewer, BorderLayout.CENTER);
+
+        return frame;
+    }
 }
